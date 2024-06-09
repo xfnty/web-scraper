@@ -1,6 +1,7 @@
 import os
 import json
 import requests
+import rich.live
 import rich.progress
 import concurrent.futures
 from bs4 import BeautifulSoup
@@ -64,53 +65,55 @@ if __name__ == '__main__':
         rich.progress.TimeRemainingColumn(),
     )
 
-    progress.start()
+    # progress.start()
 
-    def download_resource(vid: str):
-        vid_filename = os.path.join(OUTPUT_FOLDER, vid)
-        output_vid_filename = format_output_filename(vid_filename)
+    with rich.live.Live(progress, vertical_overflow="show"):
+        def download_resource(vid: str):
+            vid_filename = os.path.join(OUTPUT_FOLDER, vid)
+            output_vid_filename = format_output_filename(vid_filename)
 
-        if os.path.exists(output_vid_filename):
-            s = os.path.getsize(output_vid_filename)
-            progress.add_task(f'[green]{vid}', total=s, completed=s)
-            return
+            if os.path.exists(output_vid_filename):
+                s = os.path.getsize(output_vid_filename)
+                progress.add_task(f'[green]{vid}', total=s, completed=s)
+                return
 
-        task = progress.add_task(vid, total=0, start=False)
+            task = progress.add_task(vid, total=0, start=False)
 
-        try:
-            resp = requests.get(BASE_URL + vid, stream=True)
-            if not resp.ok or resp.headers.get('Content-Length') is None:
+            try:
+                resp = requests.get(BASE_URL + vid, stream=True)
+                if not resp.ok or resp.headers.get('Content-Length') is None:
+                    progress.start_task(task)
+                    progress.update(task, f'[red]{vid} ({resp.status_code})')
+                    progress.stop_task(task)
+                    resp.raise_for_status()
+            except Exception as e:
                 progress.start_task(task)
-                progress.update(task, f'[red]{vid} ({resp.status_code})')
+                progress.update(task, f'[red]{vid} ({str(e)})')
                 progress.stop_task(task)
-                resp.raise_for_status()
-        except Exception as e:
+                raise e
+
+            vid_size = int(resp.headers['Content-Length'])
+
             progress.start_task(task)
-            progress.update(task, f'[red]{vid} ({str(e)})')
-            progress.stop_task(task)
-            raise e
+            progress.update(task, total=vid_size)
 
-        vid_size = int(resp.headers['Content-Length'])
+            try:
+                with open(output_vid_filename, 'wb') as file:
+                    for data in resp.iter_content(chunk_size=4096):
+                        file.write(data)
+                        progress.update(task, advance=len(data))
+                    progress.update(task, description=f'[green]{vid}')
+                    progress.stop_task(task)
+            except Exception as e:
+                os.remove(output_vid_filename)
+                progress.update(task, description=f'[red]{vid} ({str(e)})')
 
-        progress.start_task(task)
-        progress.update(task, total=vid_size)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            futures = [pool.submit(download_resource, vid) for vid in vids]
 
-        try:
-            with open(output_vid_filename, 'wb') as file:
-                for data in resp.iter_content(chunk_size=4096):
-                    file.write(data)
-                    progress.update(task, advance=len(data))
-                progress.update(task, description=f'[green]{vid}')
-        except Exception as e:
-            os.remove(output_vid_filename)
-            progress.update(task, description=f'[red]{vid} ({str(e)})')
+            concurrent.futures.wait(futures)
+            # for future in concurrent.futures.as_completed(futures):
+            #     if future.exception() is not None:
+            #         pool.shutdown(cancel_futures=True)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        futures = [pool.submit(download_resource, vid) for vid in vids]
-
-        concurrent.futures.wait(futures)
-        # for future in concurrent.futures.as_completed(futures):
-        #     if future.exception() is not None:
-        #         pool.shutdown(cancel_futures=True)
-
-    progress.stop()
+    # progress.stop()
