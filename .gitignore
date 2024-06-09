@@ -3,3 +3,4 @@ html-cache.json
 
 # Folders
 output/
+.ignore/
