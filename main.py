@@ -1,5 +1,3 @@
-# pip install beautifulsoup4 rich requests
-
 import os
 import json
 import requests
